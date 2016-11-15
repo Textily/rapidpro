@@ -66,6 +66,14 @@
                                   %a{'href':'{% url "flows.flow_filter" sub_label.pk %}'}
                                     {{ sub_label.name }} ({{ sub_label.get_flows_count }})
 
+                -if campaigns
+                  %li.nav-header
+                    -trans "Campaigns"
+                  -for campaign in campaigns
+                    %li{'class': '{% if current_campaign.id == campaign.campaign__id %}active{% endif %}'}
+                      %a{'href':'{% url "flows.flow_campaign" campaign.campaign__id %}'}
+                        {{ campaign.campaign__name }} ({{campaign.count}})
+
           -block flow-list
             .span9
               - block buttons
@@ -124,7 +132,7 @@
                 %tbody
                   -for object in object_list
                     -with object.get_and_clear_unread_responses as new_responses
-                      %tr.flow.object-row.select-row{ data-object-id: "{{ object.id }}" }
+                      %tr.flow.object-row.select-row{ data-object-uuid: "{{object.uuid}}", data-object-id: "{{ object.id }}" }
                         %td.flow.checkbox.object-row-checkbox
                           -if object.flow_type != 'V' or object.org.supports_ivr
                             .glyph.icon-checkbox-unchecked.flow-checkbox.object-row-checkbox
@@ -133,7 +141,7 @@
                           -if object.flow_type == 'V'
                             .icon-phone
                           -elif object.flow_type == 'S'
-                            .icon-channel-android
+                            .icon-mobile
 
                           {{ object.name }}
 
@@ -152,17 +160,17 @@
                                     %a{href:"{% url 'flows.flow_filter' label.pk%}"}
                                       ={label.name}
 
-                        -if not object.get_total_contacts
+                        -if not object.get_total_runs
                           %td.value-status
                           %td.value-status
-                            -trans "No participants"
+                            -trans "No runs"
 
                         -else
                           %td.value-status
-                            {% blocktrans count participant_count=object.get_total_contacts|intcomma %}
-                              {{ participant_count }} participant
+                            {% blocktrans count run_count=object.get_total_runs %}
+                              {{ run_count }} run
                             {% plural %}
-                              {{ participant_count }} participants
+                              {{ run_count }} runs
                             {% endblocktrans %}
 
                           %td.value-status
@@ -180,7 +188,6 @@
                   .paginator
                     - include "smartmin/sidebar_pagination.haml"
 
-
 -block extra-script
   {{ block.super }}
 
@@ -189,9 +196,11 @@
     {% if org_perms.flows.flow_update %}
     function exportFlows(){
       var flowIds = getCheckedIds();
-      document.location = '/flow/export_results/' + "?ids=" + flowIds.join();
+      var modal = new Modax('{% trans "Export Flow Results" %}', '{% url "flows.flow_export_results" %}?ids=' + flowIds.join());
+      modal.setIcon('icon-excel');
+      modal.setRedirectOnSuccess(true);
+      modal.show();
     }
-
     {% endif %}
 
     {% if org_perms.flows.flow_update %}
@@ -199,7 +208,6 @@
     function postLabelChanges(flowsIds, labelId, addLabel, number, onError) {
 
          fetchPJAXContent("", "#pjax", { postData: { objects: flowsIds, label: labelId, add: addLabel, action: 'label', pjax: 'true', number:number },
-
 
          forceReload: true, onSuccess: function(data, textStatus) {
 
@@ -219,7 +227,7 @@
     $(document).ready( function() {
 
       $(document).on('click', 'tr.flow td:nth-child(n+2)', function(e){
-         document.location = '/flow/editor/' + $(this).parent().data("object-id");
+         document.location = '/flow/editor/' + $(this).parent().data("object-uuid");
       });
 
       {% if org_perms.flows.flow_create %}

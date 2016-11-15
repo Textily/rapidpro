@@ -8,6 +8,7 @@
 # temba
 dump.rdb
 .coverage
+coverage_html_report
 env
 build
 config/gen
@@ -24,10 +25,12 @@ static/coffee/flows.js
 static/coffee/simulator.js
 static/coffee/temba.js
 static/coffee/formax.js
+static/bower
 static/javascripts/
 temba/settings.py
 temba/smartmin
 temba.db
+smartmin
 
 
 # Exclude media folder except files used for import testing
@@ -106,3 +109,8 @@ docs/_build/
 # PyBuilder
 target/
 textit
+
+# Vagrant/Ansible
+.vagrant/
+ansible/vendor/
+ansible/site.retry

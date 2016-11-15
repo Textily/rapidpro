@@ -1,31 +1,27 @@
-import sys, os
-from hamlpy import templatize
+from __future__ import unicode_literals
 
-#-----------------------------------------------------------------------------------
+import djcelery
+import iptools
+import os
+import sys
+
+from celery.schedules import crontab
+from datetime import timedelta
+from django.utils.translation import ugettext_lazy as _
+
+# -----------------------------------------------------------------------------------
 # Default to debugging
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 DEBUG = True
-TEMPLATE_DEBUG = DEBUG
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Sets TESTING to True if this configuration is read during a unit test
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 TESTING = sys.argv[1:2] == ['test']
 
 if TESTING:
     PASSWORD_HASHERS = ('django.contrib.auth.hashers.MD5PasswordHasher',)
     DEBUG = False
-    TEMPLATE_DEBUG = False
-
-    # if nose's failfast is used, also skip migrations
-    if '--failfast' in sys.argv:
-        class DisableMigrations(object):
-            def __contains__(self, item):
-                return True
-            
-            def __getitem__(self, item):
-                return "notmigrations"
-        MIGRATION_MODULES = DisableMigrations()
 
 ADMINS = (
     ('RapidPro', 'code@yourdomain.io'),
@@ -35,10 +31,10 @@ MANAGERS = ADMINS
 # hardcode the postgis version so we can do reset db's from a blank database
 POSTGIS_VERSION = (2, 1)
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # set the mail settings, override these in your settings.py
 # if your site was at http://temba.io, it might look like this:
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_HOST_USER = 'server@temba.io'
 DEFAULT_FROM_EMAIL = 'server@temba.io'
@@ -50,32 +46,31 @@ AWS_STORAGE_BUCKET_NAME = 'dl-temba-io'
 AWS_BUCKET_DOMAIN = AWS_STORAGE_BUCKET_NAME + '.s3.amazonaws.com'
 STORAGE_ROOT_DIR = 'test_orgs' if TESTING else 'orgs'
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # On Unix systems, a value of None will cause Django to use the same
 # timezone as the operating system.
 # If running in a Windows environment this must be set to the same as your
 # system time zone
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 USE_TZ = True
 TIME_ZONE = 'GMT'
 USER_TIME_ZONE = 'Africa/Kigali'
 
 MODELTRANSLATION_TRANSLATION_REGISTRY = "translation"
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Default language used for this installation
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 LANGUAGE_CODE = 'en-us'
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Available languages for translation
-#-----------------------------------------------------------------------------------
-gettext = lambda s: s
+# -----------------------------------------------------------------------------------
 LANGUAGES = (
-    ('en-us', gettext("English")),
-    ('pt-br', gettext("Portuguese")),
-    ('fr', gettext("French")),
-    ('es', gettext("Spanish")))
+    ('en-us', _("English")),
+    ('pt-br', _("Portuguese")),
+    ('fr', _("French")),
+    ('es', _("Spanish")))
 
 DEFAULT_LANGUAGE = "en-us"
 DEFAULT_SMS_LANGUAGE = "en-us"
@@ -90,36 +85,10 @@ USE_I18N = True
 # calendars according to the current locale
 USE_L10N = True
 
-# Absolute filesystem path to the directory that will hold user-uploaded files.
-# Example: "/home/media/media.lawrence.com/media/"
-MEDIA_ROOT = ''
-
-# URL that handles the media served from MEDIA_ROOT. Make sure to use a
-# trailing slash.
-# Examples: "http://media.lawrence.com/media/", "http://example.com/media/"
-MEDIA_URL = ''
-
-# Absolute path to the directory static files should be collected to.
-# Don't put anything in this directory yourself; store your static files
-# in apps' "static/" subdirectories and in STATICFILES_DIRS.
-# Example: "/home/media/media.lawrence.com/static/"
-STATIC_ROOT = ''
-
-# URL prefix for static files.
-# Example: "http://media.lawrence.com/static/"
-STATIC_URL = '/static/'
-
 # URL prefix for admin static files -- CSS, JavaScript and images.
 # Make sure to use a trailing slash.
 # Examples: "http://foo.com/static/admin/", "/static/admin/".
 ADMIN_MEDIA_PREFIX = '/static/admin/'
-
-# Additional locations of static files
-STATICFILES_DIRS = (
-    # Put strings here, like "/home/html/static" or "C:/www/django/static".
-    # Always use forward slashes, even on Windows.
-    # Don't forget to use absolute paths, not relative paths.
-)
 
 # List of finder classes that know how to find static files in
 # various locations.
@@ -132,36 +101,63 @@ STATICFILES_FINDERS = (
 # Make this unique, and don't share it with anybody.
 SECRET_KEY = 'your own secret key'
 
-# List of callables that know how to import templates from various sources.
-TEMPLATE_LOADERS = (
-    'hamlpy.template.loaders.HamlPyFilesystemLoader',
-    'hamlpy.template.loaders.HamlPyAppDirectoriesLoader',
-    'django.template.loaders.filesystem.Loader',
-    'django.template.loaders.app_directories.Loader',
-    'django.template.loaders.eggs.Loader',
-)
-
 EMAIL_CONTEXT_PROCESSORS = ('temba.utils.email.link_components',)
 
-TEMPLATE_CONTEXT_PROCESSORS = (
-    'django.contrib.auth.context_processors.auth',
-    'django.core.context_processors.debug',
-    'django.core.context_processors.i18n',
-    'django.core.context_processors.media',
-    'django.core.context_processors.static',
-    'django.contrib.messages.context_processors.messages',
-    'django.core.context_processors.request',
-    'temba.context_processors.branding',
-    'temba.orgs.context_processors.user_group_perms_processor',
-    'temba.orgs.context_processors.unread_count_processor',
-    'temba.channels.views.channel_status_processor',
-    'temba.msgs.views.send_message_auto_complete_processor',
-    'temba.api.views.webhook_status_processor',
-    'temba.orgs.context_processors.settings_includer',
-)
+
+# -----------------------------------------------------------------------------------
+# Directory Configuration
+# -----------------------------------------------------------------------------------
+PROJECT_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)))
+LOCALE_PATHS = (os.path.join(PROJECT_DIR, '../locale'),)
+RESOURCES_DIR = os.path.join(PROJECT_DIR, '../resources')
+FIXTURE_DIRS = (os.path.join(PROJECT_DIR, '../fixtures'),)
+TESTFILES_DIR = os.path.join(PROJECT_DIR, '../testfiles')
+STATICFILES_DIRS = (os.path.join(PROJECT_DIR, '../static'), os.path.join(PROJECT_DIR, '../media'), )
+STATIC_ROOT = os.path.join(PROJECT_DIR, '../sitestatic')
+STATIC_URL = '/static/'
+COMPRESS_ROOT = os.path.join(PROJECT_DIR, '../sitestatic')
+MEDIA_ROOT = os.path.join(PROJECT_DIR, '../media')
+MEDIA_URL = "/media/"
+
+
+# -----------------------------------------------------------------------------------
+# Templates Configuration
+# -----------------------------------------------------------------------------------
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [os.path.join(PROJECT_DIR, '../templates')],
+        'OPTIONS': {
+            'context_processors': [
+                'django.contrib.auth.context_processors.auth',
+                'django.core.context_processors.debug',
+                'django.core.context_processors.i18n',
+                'django.core.context_processors.media',
+                'django.core.context_processors.static',
+                'django.contrib.messages.context_processors.messages',
+                'django.core.context_processors.request',
+                'temba.context_processors.branding',
+                'temba.orgs.context_processors.user_group_perms_processor',
+                'temba.orgs.context_processors.unread_count_processor',
+                'temba.channels.views.channel_status_processor',
+                'temba.msgs.views.send_message_auto_complete_processor',
+                'temba.api.views.webhook_status_processor',
+                'temba.orgs.context_processors.settings_includer',
+            ],
+            'loaders': [
+                'temba.utils.haml.HamlFilesystemLoader',
+                'temba.utils.haml.HamlAppDirectoriesLoader',
+                'django.template.loaders.filesystem.Loader',
+                'django.template.loaders.app_directories.Loader',
+                'django.template.loaders.eggs.Loader'
+            ],
+            'debug': False if TESTING else DEBUG
+        },
+    },
+]
 
 if TESTING:
-    TEMPLATE_CONTEXT_PROCESSORS += ('temba.tests.add_testing_flag_to_context', )
+    TEMPLATES[0]['OPTIONS']['context_processors'] += ('temba.tests.add_testing_flag_to_context', )
 
 MIDDLEWARE_CLASSES = (
     'django.middleware.common.CommonMiddleware',
@@ -182,9 +178,10 @@ ROOT_URLCONF = 'temba.urls'
 # other urls to add
 APP_URLS = []
 
-SITEMAP = ('public.public_index', 'public.video_list', 'public.public_blog',
-           'api', 'api.explorer', 'api.webhook', 'api.webhook_simulator',
-           'api.sms', 'api.flows', 'api.runs', 'api.calls', 'api.channels')
+SITEMAP = ('public.public_index',
+           'public.public_blog',
+           'public.video_list',
+           'api')
 
 INSTALLED_APPS = (
     'django.contrib.auth',
@@ -227,10 +224,6 @@ INSTALLED_APPS = (
     # django-timezones
     'timezones',
 
-    # sentry
-    'raven.contrib.django',
-    'raven.contrib.django.celery',
-
     # temba apps
     'temba.assets',
     'temba.auth_tweaks',
@@ -249,10 +242,11 @@ INSTALLED_APPS = (
     'temba.ivr',
     'temba.locations',
     'temba.values',
+    'temba.airtime',
 )
 
 # the last installed app that uses smartmin permissions
-PERMISSIONS_APP = 'temba.values'
+PERMISSIONS_APP = 'temba.airtime'
 
 LOGGING = {
     'version': 1,
@@ -287,27 +281,29 @@ LOGGING = {
     },
 }
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Branding Configuration
-#-----------------------------------------------------------------------------------
-from django.utils.translation import ugettext_lazy as _
+# -----------------------------------------------------------------------------------
 BRANDING = {
     'rapidpro.io': {
         'slug': 'rapidpro',
         'name': 'RapidPro',
         'org': 'UNICEF',
+        'colors': dict(primary='#0c6596'),
         'styles': ['brands/rapidpro/font/style.css', 'brands/rapidpro/less/style.less'],
         'welcome_topup': 1000,
         'email': 'join@rapidpro.io',
         'support_email': 'support@rapidpro.io',
         'link': 'https://app.rapidpro.io',
         'api_link': 'https://api.rapidpro.io',
-        'docs_link': 'http://knowledge.rapidpro.io',
+        'docs_link': 'http://docs.rapidpro.io',
         'domain': 'app.rapidpro.io',
         'favico': 'brands/rapidpro/rapidpro.ico',
         'splash': '/brands/rapidpro/splash.jpg',
         'logo': '/brands/rapidpro/logo.png',
         'allow_signups': True,
+        'tiers': dict(import_flows=0, multi_user=0, multi_org=0),
+        'bundles': [],
         'welcome_packs': [dict(size=5000, name="Demo Account"), dict(size=100000, name="UNICEF Account")],
         'description': _("Visually build nationally scalable mobile applications from anywhere in the world."),
         'credits': _("Copyright &copy; 2012-2015 UNICEF, Nyaruka. All Rights Reserved.")
@@ -315,24 +311,9 @@ BRANDING = {
 }
 DEFAULT_BRAND = 'rapidpro.io'
 
-#-----------------------------------------------------------------------------------
-# Directory Configuration
-#-----------------------------------------------------------------------------------
-PROJECT_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)))
-LOCALE_PATHS = (os.path.join(PROJECT_DIR, '../locale'),)
-RESOURCES_DIR = os.path.join(PROJECT_DIR, '../resources')
-FIXTURE_DIRS = (os.path.join(PROJECT_DIR, '../fixtures'),)
-TESTFILES_DIR = os.path.join(PROJECT_DIR, '../testfiles')
-TEMPLATE_DIRS = (os.path.join(PROJECT_DIR, '../templates'),)
-STATICFILES_DIRS = (os.path.join(PROJECT_DIR, '../static'), os.path.join(PROJECT_DIR, '../media'), )
-STATIC_ROOT = os.path.join(PROJECT_DIR, '../sitestatic')
-COMPRESS_ROOT = os.path.join(PROJECT_DIR, '../sitestatic')
-MEDIA_ROOT = os.path.join(PROJECT_DIR, '../media')
-MEDIA_URL = "/media/"
-
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Permission Management
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 
 # this lets us easily create new permissions across our objects
 PERMISSIONS = {
@@ -341,6 +322,14 @@ PERMISSIONS = {
           'update',  # can update an object
           'delete',  # can delete an object,
           'list'),   # can view a list of the objects
+
+    'api.apitoken': ('refresh',),
+
+    'api.resthook': ('api', 'list'),
+
+    'api.webhookevent': ('api',),
+
+    'api.resthooksubscriber': ('api',),
 
     'campaigns.campaign': ('api',
                            'archived',
@@ -352,14 +341,17 @@ PERMISSIONS = {
     'contacts.contact': ('api',
                          'block',
                          'blocked',
+                         'break_anon',
                          'customize',
                          'export',
-                         'failed',
+                         'stopped',
                          'filter',
                          'history',
                          'import',
                          'omnibox',
                          'unblock',
+                         'unstop',
+                         'update_fields'
                          ),
 
     'contacts.contactfield': ('api',
@@ -375,12 +367,15 @@ PERMISSIONS = {
                                 'boundaries',
                                 'geometry'),
 
-    'orgs.org': ('api',
+    'orgs.org': ('accounts',
+                 'api',
                  'country',
                  'clear_cache',
                  'create_login',
+                 'create_sub_org',
                  'download',
                  'edit',
+                 'edit_sub_org',
                  'export',
                  'grant',
                  'home',
@@ -389,13 +384,19 @@ PERMISSIONS = {
                  'languages',
                  'manage',
                  'manage_accounts',
+                 'manage_accounts_sub_org',
+                 'nexmo_configuration',
                  'nexmo_account',
                  'nexmo_connect',
                  'plivo_connect',
                  'profile',
+                 'resthooks',
                  'service',
                  'signup',
+                 'sub_orgs',
                  'surveyor',
+                 'transfer_credits',
+                 'transfer_to_account',
                  'trial',
                  'twilio_account',
                  'twilio_connect',
@@ -411,21 +412,33 @@ PERMISSIONS = {
                          'claim_africas_talking',
                          'claim_android',
                          'claim_blackmyna',
+                         'claim_chikka',
                          'claim_clickatell',
                          'claim_external',
+                         'claim_facebook',
+                         'claim_globe',
                          'claim_high_connection',
                          'claim_hub9',
                          'claim_infobip',
+                         'claim_jasmin',
                          'claim_kannel',
                          'claim_m3tech',
+                         'claim_mblox',
                          'claim_nexmo',
                          'claim_plivo',
                          'claim_shaqodoon',
                          'claim_smscentral',
+                         'claim_start',
+                         'claim_telegram',
                          'claim_twilio',
+                         'claim_twiml_api',
+                         'claim_twilio_messaging_service',
                          'claim_twitter',
                          'claim_verboice',
+                         'claim_viber',
+                         'create_viber',
                          'claim_vumi',
+                         'claim_vumi_ussd',
                          'claim_yo',
                          'claim_zenvia',
                          'configuration',
@@ -436,12 +449,18 @@ PERMISSIONS = {
                          'search_numbers',
                          ),
 
+    'channels.channelevent': ('api',
+                              'calls'),
+
+    'flows.flowstart': ('api',),
+
     'flows.flow': ('activity',
                    'activity_list',
                    'analytics',
                    'api',
                    'archived',
                    'broadcast',
+                   'campaign',
                    'completion',
                    'copy',
                    'editor',
@@ -486,8 +505,6 @@ PERMISSIONS = {
                        'send',
                        ),
 
-    'msgs.call': ('api',),
-
     'msgs.label': ('api', 'create', 'create_folder'),
 
     'orgs.topup': ('manage',),
@@ -498,6 +515,7 @@ PERMISSIONS = {
                          'inbound_call',
                          'keyword',
                          'missed_call',
+                         'new_conversation',
                          'register',
                          'schedule',
                          ),
@@ -513,12 +531,13 @@ GROUP_PERMISSIONS = {
     "Beta": (
     ),
     "Surveyors": (
-        'orgs.org_surveyor',
-        'orgs.org_api',
         'contacts.contact_api',
         'contacts.contactfield_api',
+        'flows.flow_api',
         'locations.adminboundary_api',
-        'flows.flow_api'
+        'orgs.org_api',
+        'orgs.org_surveyor',
+        'msgs.msg_api',
     ),
     "Granters": (
         'orgs.org_grant',
@@ -526,6 +545,7 @@ GROUP_PERMISSIONS = {
     "Customer Support": (
         'auth.user_list',
         'auth.user_update',
+        'contacts.contact_break_anon',
         'flows.flow_editor',
         'flows.flow_json',
         'flows.flow_read',
@@ -540,6 +560,14 @@ GROUP_PERMISSIONS = {
         'orgs.topup_update',
     ),
     "Administrators": (
+        'airtime.airtimetransfer_list',
+        'airtime.airtimetransfer_read',
+
+        'api.apitoken_refresh',
+        'api.resthook_api',
+        'api.resthook_list',
+        'api.resthooksubscriber_api',
+        'api.webhookevent_api',
         'api.webhookevent_list',
         'api.webhookevent_read',
 
@@ -553,15 +581,17 @@ GROUP_PERMISSIONS = {
         'contacts.contact_customize',
         'contacts.contact_delete',
         'contacts.contact_export',
-        'contacts.contact_failed',
         'contacts.contact_filter',
         'contacts.contact_history',
         'contacts.contact_import',
         'contacts.contact_list',
         'contacts.contact_omnibox',
         'contacts.contact_read',
+        'contacts.contact_stopped',
         'contacts.contact_unblock',
+        'contacts.contact_unstop',
         'contacts.contact_update',
+        'contacts.contact_update_fields',
         'contacts.contactfield.*',
         'contacts.contactgroup.*',
 
@@ -574,19 +604,28 @@ GROUP_PERMISSIONS = {
         'locations.adminboundary_boundaries',
         'locations.adminboundary_geometry',
 
+        'orgs.org_accounts',
         'orgs.org_api',
         'orgs.org_country',
+        'orgs.org_create_sub_org',
         'orgs.org_download',
         'orgs.org_edit',
+        'orgs.org_edit_sub_org',
         'orgs.org_export',
         'orgs.org_home',
         'orgs.org_import',
         'orgs.org_languages',
         'orgs.org_manage_accounts',
+        'orgs.org_manage_accounts_sub_org',
         'orgs.org_nexmo_account',
         'orgs.org_nexmo_connect',
+        'orgs.org_nexmo_configuration',
         'orgs.org_plivo_connect',
         'orgs.org_profile',
+        'orgs.org_resthooks',
+        'orgs.org_sub_orgs',
+        'orgs.org_transfer_credits',
+        'orgs.org_transfer_to_account',
         'orgs.org_twilio_account',
         'orgs.org_twilio_connect',
         'orgs.org_webhook',
@@ -602,20 +641,32 @@ GROUP_PERMISSIONS = {
         'channels.channel_claim_africas_talking',
         'channels.channel_claim_android',
         'channels.channel_claim_blackmyna',
+        'channels.channel_claim_chikka',
         'channels.channel_claim_clickatell',
         'channels.channel_claim_external',
+        'channels.channel_claim_facebook',
+        'channels.channel_claim_globe',
         'channels.channel_claim_high_connection',
         'channels.channel_claim_hub9',
         'channels.channel_claim_infobip',
+        'channels.channel_claim_jasmin',
         'channels.channel_claim_kannel',
+        'channels.channel_claim_mblox',
         'channels.channel_claim_m3tech',
         'channels.channel_claim_plivo',
         'channels.channel_claim_shaqodoon',
         'channels.channel_claim_smscentral',
+        'channels.channel_claim_start',
+        'channels.channel_claim_telegram',
         'channels.channel_claim_twilio',
+        'channels.channel_claim_twiml_api',
+        'channels.channel_claim_twilio_messaging_service',
         'channels.channel_claim_twitter',
         'channels.channel_claim_verboice',
+        'channels.channel_claim_viber',
+        'channels.channel_create_viber',
         'channels.channel_claim_vumi',
+        'channels.channel_claim_vumi_ussd',
         'channels.channel_claim_yo',
         'channels.channel_claim_zenvia',
         'channels.channel_configuration',
@@ -628,12 +679,14 @@ GROUP_PERMISSIONS = {
         'channels.channel_search_nexmo',
         'channels.channel_search_numbers',
         'channels.channel_update',
+        'channels.channelevent.*',
         'channels.channellog_list',
         'channels.channellog_read',
 
         'reports.report.*',
 
         'flows.flow.*',
+        'flows.flowstart_api',
         'flows.flowlabel.*',
         'flows.ruleset.*',
 
@@ -641,7 +694,6 @@ GROUP_PERMISSIONS = {
 
         'msgs.broadcast.*',
         'msgs.broadcastschedule.*',
-        'msgs.call.*',
         'msgs.label.*',
         'msgs.msg_api',
         'msgs.msg_archive',
@@ -661,8 +713,16 @@ GROUP_PERMISSIONS = {
 
     ),
     "Editors": (
+        'api.apitoken_refresh',
+        'api.resthook_api',
+        'api.resthook_list',
+        'api.resthooksubscriber_api',
+        'api.webhookevent_api',
         'api.webhookevent_list',
         'api.webhookevent_read',
+
+        'airtime.airtimetransfer_list',
+        'airtime.airtimetransfer_read',
 
         'campaigns.campaign.*',
         'campaigns.campaignevent.*',
@@ -674,15 +734,17 @@ GROUP_PERMISSIONS = {
         'contacts.contact_customize',
         'contacts.contact_delete',
         'contacts.contact_export',
-        'contacts.contact_failed',
         'contacts.contact_filter',
         'contacts.contact_history',
         'contacts.contact_import',
         'contacts.contact_list',
         'contacts.contact_omnibox',
         'contacts.contact_read',
+        'contacts.contact_stopped',
         'contacts.contact_unblock',
+        'contacts.contact_unstop',
         'contacts.contact_update',
+        'contacts.contact_update_fields',
         'contacts.contactfield.*',
         'contacts.contactgroup.*',
 
@@ -701,6 +763,7 @@ GROUP_PERMISSIONS = {
         'orgs.org_home',
         'orgs.org_import',
         'orgs.org_profile',
+        'orgs.org_resthooks',
         'orgs.org_webhook',
         'orgs.topup_list',
         'orgs.topup_read',
@@ -713,20 +776,32 @@ GROUP_PERMISSIONS = {
         'channels.channel_claim_africas_talking',
         'channels.channel_claim_android',
         'channels.channel_claim_blackmyna',
+        'channels.channel_claim_chikka',
         'channels.channel_claim_clickatell',
         'channels.channel_claim_external',
+        'channels.channel_claim_facebook',
+        'channels.channel_claim_globe',
         'channels.channel_claim_high_connection',
         'channels.channel_claim_hub9',
         'channels.channel_claim_infobip',
+        'channels.channel_claim_jasmin',
         'channels.channel_claim_kannel',
+        'channels.channel_claim_mblox',
         'channels.channel_claim_m3tech',
         'channels.channel_claim_plivo',
         'channels.channel_claim_shaqodoon',
         'channels.channel_claim_smscentral',
+        'channels.channel_claim_start',
+        'channels.channel_claim_telegram',
         'channels.channel_claim_twilio',
+        'channels.channel_claim_twiml_api',
+        'channels.channel_claim_twilio_messaging_service',
         'channels.channel_claim_twitter',
         'channels.channel_claim_verboice',
+        'channels.channel_claim_viber',
+        'channels.channel_create_viber',
         'channels.channel_claim_vumi',
+        'channels.channel_claim_vumi_ussd',
         'channels.channel_claim_yo',
         'channels.channel_claim_zenvia',
         'channels.channel_configuration',
@@ -738,10 +813,12 @@ GROUP_PERMISSIONS = {
         'channels.channel_read',
         'channels.channel_search_numbers',
         'channels.channel_update',
+        'channels.channelevent.*',
 
         'reports.report.*',
 
         'flows.flow.*',
+        'flows.flowstart_api',
         'flows.flowlabel.*',
         'flows.ruleset.*',
 
@@ -749,7 +826,6 @@ GROUP_PERMISSIONS = {
 
         'msgs.broadcast.*',
         'msgs.broadcastschedule.*',
-        'msgs.call.*',
         'msgs.label.*',
         'msgs.msg_api',
         'msgs.msg_archive',
@@ -769,6 +845,8 @@ GROUP_PERMISSIONS = {
 
     ),
     "Viewers": (
+        'api.resthook_list',
+
         'campaigns.campaign_archived',
         'campaigns.campaign_list',
         'campaigns.campaign_read',
@@ -776,11 +854,11 @@ GROUP_PERMISSIONS = {
 
         'contacts.contact_blocked',
         'contacts.contact_export',
-        'contacts.contact_failed',
         'contacts.contact_filter',
         'contacts.contact_history',
         'contacts.contact_list',
         'contacts.contact_read',
+        'contacts.contact_stopped',
 
         'locations.adminboundary_boundaries',
         'locations.adminboundary_geometry',
@@ -795,9 +873,11 @@ GROUP_PERMISSIONS = {
 
         'channels.channel_list',
         'channels.channel_read',
+        'channels.channelevent_calls',
 
         'flows.flow_activity',
         'flows.flow_archived',
+        'flows.flow_campaign',
         'flows.flow_completion',
         'flows.flow_export',
         'flows.flow_export_results',
@@ -811,12 +891,10 @@ GROUP_PERMISSIONS = {
         'flows.flow_simulate',
         'flows.ruleset_analytics',
         'flows.ruleset_results',
-        'flows.ruleset_map',
         'flows.ruleset_choropleth',
 
         'msgs.broadcast_schedule_list',
         'msgs.broadcast_schedule_read',
-        'msgs.call_list',
         'msgs.msg_archived',
         'msgs.msg_export',
         'msgs.msg_failed',
@@ -831,38 +909,33 @@ GROUP_PERMISSIONS = {
     )
 }
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Login / Logout
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 LOGIN_URL = "/users/login/"
 LOGOUT_URL = "/users/logout/"
 LOGIN_REDIRECT_URL = "/org/choose/"
 LOGOUT_REDIRECT_URL = "/"
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Guardian Configuration
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 AUTHENTICATION_BACKENDS = (
     'smartmin.backends.CaseInsensitiveBackend',
     'guardian.backends.ObjectPermissionBackend',
 )
 
-ANONYMOUS_USER_ID = -1
+ANONYMOUS_USER_NAME = 'AnonymousUser'
 
-#-----------------------------------------------------------------------------------
-# Async tasks with django-celery, for testing we use a memory test backend
-#-----------------------------------------------------------------------------------
-BROKER_BACKEND = 'memory'
+# -----------------------------------------------------------------------------------
+# Our test runner is standard but with ability to exclude apps
+# -----------------------------------------------------------------------------------
+TEST_RUNNER = 'temba.tests.ExcludeTestRunner'
+TEST_EXCLUDE = ('smartmin',)
 
-#-----------------------------------------------------------------------------------
-# Django-Nose config
-#-----------------------------------------------------------------------------------
-TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
-
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Debug Toolbar
-#-----------------------------------------------------------------------------------
-import iptools
+# -----------------------------------------------------------------------------------
 INTERNAL_IPS = iptools.IpRangeList(
     '127.0.0.1',
     '192.168.0.10',
@@ -874,13 +947,9 @@ DEBUG_TOOLBAR_CONFIG = {
     'INTERCEPT_REDIRECTS': False,  # disable redirect traps
 }
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Crontab Settings ..
-#-----------------------------------------------------------------------------------
-
-from datetime import timedelta
-from celery.schedules import crontab
-
+# -----------------------------------------------------------------------------------
 CELERYBEAT_SCHEDULE = {
     "retry-webhook-events": {
         'task': 'retry_events_task',
@@ -902,6 +971,10 @@ CELERYBEAT_SCHEDULE = {
         'task': 'check_flows_task',
         'schedule': timedelta(seconds=60),
     },
+    "check-flow-timeouts": {
+        'task': 'check_flow_timeouts_task',
+        'schedule': timedelta(seconds=20),
+    },
     "check-credits": {
         'task': 'check_credits_task',
         'schedule': timedelta(seconds=900)
@@ -914,6 +987,10 @@ CELERYBEAT_SCHEDULE = {
         'task': 'fail_old_messages',
         'schedule': crontab(hour=0, minute=0),
     },
+    "clear-old-msg-external-ids": {
+        'task': 'clear_old_msg_external_ids',
+        'schedule': crontab(hour=1, minute=0),
+    },
     "trim-channel-log": {
         'task': 'trim_channel_log_task',
         'schedule': crontab(hour=3, minute=0),
@@ -921,7 +998,27 @@ CELERYBEAT_SCHEDULE = {
     "calculate-credit-caches": {
         'task': 'calculate_credit_caches',
         'schedule': timedelta(days=3),
-    }
+    },
+    "squash-flowruncounts": {
+        'task': 'squash_flowruncounts',
+        'schedule': timedelta(seconds=300),
+    },
+    "squash-channelcounts": {
+        'task': 'squash_channelcounts',
+        'schedule': timedelta(seconds=300),
+    },
+    "squash-systemlabels": {
+        'task': 'squash_systemlabels',
+        'schedule': timedelta(seconds=300),
+    },
+    "squash-topupcredits": {
+        'task': 'squash_topupcredits',
+        'schedule': timedelta(seconds=300),
+    },
+    "squash-contactgroupcounts": {
+        'task': 'squash_contactgroupcounts',
+        'schedule': timedelta(seconds=300),
+    },
 }
 
 # Mapping of task name to task function path, used when CELERY_ALWAYS_EAGER is set to True
@@ -931,10 +1028,9 @@ CELERY_TASK_MAP = {
     'handle_event_task': 'temba.msgs.tasks.handle_event_task',
 }
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Async tasks with django-celery
-#-----------------------------------------------------------------------------------
-import djcelery
+# -----------------------------------------------------------------------------------
 djcelery.setup_loader()
 
 REDIS_HOST = 'localhost'
@@ -956,51 +1052,63 @@ HOSTNAME = "localhost"
 # The URL and port of the proxy server to use when needed (if any, in requests format)
 OUTGOING_PROXIES = {}
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Cache to Redis
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 CACHES = {
     "default": {
-        "BACKEND": "redis_cache.cache.RedisCache",
-        "LOCATION": "%s:%s:%s" % (REDIS_HOST, REDIS_PORT, REDIS_DB),
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://%s:%s/%s" % (REDIS_HOST, REDIS_PORT, REDIS_DB),
         "OPTIONS": {
-            "CLIENT_CLASS": "redis_cache.client.DefaultClient",
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
         }
     }
 }
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Django-rest-framework configuration
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework.authentication.SessionAuthentication',
-        'temba.api.authentication.APITokenAuthentication',
+        'temba.api.support.APITokenAuthentication',
     ),
-    'PAGINATE_BY': 250,
+    'DEFAULT_THROTTLE_CLASSES': (
+        'temba.api.support.OrgRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'v2': '2500/hour',
+        'v2.contacts': '2500/hour',
+        'v2.messages': '2500/hour',
+        'v2.runs': '2500/hour',
+        'v2.api': '2500/hour',
+    },
+    'PAGE_SIZE': 250,
     'DEFAULT_RENDERER_CLASSES': (
-        'temba.api.renderers.DocumentationRenderer',
+        'temba.api.support.DocumentationRenderer',
         'rest_framework.renderers.JSONRenderer',
-        'rest_framework.renderers.XMLRenderer',
+        'rest_framework_xml.renderers.XMLRenderer',
     ),
-    'EXCEPTION_HANDLER': 'temba.api.temba_exception_handler'
+    'EXCEPTION_HANDLER': 'temba.api.support.temba_exception_handler',
+    'UNICODE_JSON': False
 }
 REST_HANDLE_EXCEPTIONS = not TESTING
 
-#-----------------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------------
 # Aggregator settings
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 
 # Hub9 is an aggregator in Indonesia, set this to the endpoint for your service
 # and make sure you send from a whitelisted IP Address
 HUB9_ENDPOINT = 'http://175.103.48.29:28078/testing/smsmt.php'
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Django Compressor configuration
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 
 COMPRESS_PRECOMPILERS = (
     ('text/less', 'lessc --include-path="%s" {infile} {outfile}' % os.path.join(PROJECT_DIR, '../static', 'less')),
@@ -1014,9 +1122,9 @@ COMPRESS_URL = '/sitestatic/'
 MAGE_API_URL = 'http://localhost:8026/api/v1'
 MAGE_AUTH_TOKEN = '___MAGE_TOKEN_YOU_PICK__'
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # RapidPro configuration settings
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 
 ######
 # DANGER: only turn this on if you know what you are doing!
@@ -1033,20 +1141,38 @@ SEND_WEBHOOKS = False
 #         could cause emails to be sent in test environment
 SEND_EMAILS = False
 
+######
+# DANGER: only turn this on if you know what you are doing!
+#         could cause airtime transfers in test environment
+SEND_AIRTIME = False
+
+
 MESSAGE_HANDLERS = ['temba.triggers.handlers.TriggerHandler',
                     'temba.flows.handlers.FlowHandler',
                     'temba.triggers.handlers.CatchAllHandler']
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # Store sessions in our cache
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
 SESSION_CACHE_ALIAS = "default"
 
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 # 3rd Party Integration Keys
-#-----------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------
 TWITTER_API_KEY = os.environ.get('TWITTER_API_KEY', 'MISSING_TWITTER_API_KEY')
 TWITTER_API_SECRET = os.environ.get('TWITTER_API_SECRET', 'MISSING_TWITTER_API_SECRET')
 
-# SEGMENT_IO_KEY = "your segment.io key here"
+SEGMENT_IO_KEY = os.environ.get('SEGMENT_IO_KEY', '')
+
+LIBRATO_USER = os.environ.get('LIBRATO_USER', '')
+LIBRATO_TOKEN = os.environ.get('LIBRATO_TOKEN', '')
+
+# -----------------------------------------------------------------------------------
+# IP Addresses
+# These are the externally accessible IP addresses of the servers running RapidPro.
+# Needed for channel types that authenticate by whitelisting public IPs.
+#
+# You need to change these to real addresses to work with these.
+# -----------------------------------------------------------------------------------
+IP_ADDRESSES = ('172.16.10.10', '162.16.10.20')

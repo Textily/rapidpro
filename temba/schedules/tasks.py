@@ -1,8 +1,8 @@
 from __future__ import unicode_literals
 
 from django.utils import timezone
+from django_redis import get_redis_connection
 from djcelery_transactions import task
-from redis_cache import get_redis_connection
 from .models import Schedule
 from django.core.exceptions import ObjectDoesNotExist
 
@@ -50,9 +50,9 @@ def check_schedule_task(sched_id=None):
                         if sched.repeat_period == 'O':
                             sched.reset()
 
-        except ObjectDoesNotExist as e:
+        except ObjectDoesNotExist:
             # this means the schedule already got fired, so perfectly ok, ignore
             pass
 
-        except:  # pragma: no cover
+        except Exception:  # pragma: no cover
             logger.error("Error running schedule: %s" % sched.pk, exc_info=True)

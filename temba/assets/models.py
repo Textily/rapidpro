@@ -9,6 +9,7 @@ from temba.contacts.models import ExportContactsTask
 from temba.flows.models import ExportFlowResultsTask
 from temba.msgs.models import ExportMessagesTask
 
+
 class AssetException(Exception):
     pass
 
@@ -132,21 +133,21 @@ class ContactExportAssetStore(BaseAssetStore):
     model = ExportContactsTask
     directory = 'contact_exports'
     permission = 'contacts.contact_export'
-    extensions = ('xls', 'csv')
+    extensions = ('xlsx', 'csv')
 
 
 class ResultsExportAssetStore(BaseAssetStore):
     model = ExportFlowResultsTask
     directory = 'results_exports'
     permission = 'flows.flow_export_results'
-    extensions = ('xls',)
+    extensions = ('xlsx',)
 
 
 class MessageExportAssetStore(BaseAssetStore):
     model = ExportMessagesTask
     directory = 'message_exports'
     permission = 'msgs.msg_export'
-    extensions = ('xls',)
+    extensions = ('xlsx',)
 
 
 class AssetType(Enum):

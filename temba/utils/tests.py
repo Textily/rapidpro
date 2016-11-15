@@ -5,27 +5,31 @@ from __future__ import absolute_import, unicode_literals
 import json
 import pytz
 
+from celery.app.task import Task
 from datetime import datetime, time
 from decimal import Decimal
 from django.conf import settings
 from django.core.paginator import Paginator
 from django.utils import timezone
-from temba_expressions.evaluator import EvaluationContext, DateStyle
-from mock import patch
-from redis_cache import get_redis_connection
+from django_redis import get_redis_connection
+from mock import patch, PropertyMock
+from openpyxl import load_workbook
 from temba.contacts.models import Contact
 from temba.tests import TembaTest
-from xlrd import open_workbook
+from temba_expressions.evaluator import EvaluationContext, DateStyle
 from .cache import get_cacheable_result, get_cacheable_attr, incrby_existing
 from .email import is_valid_address
 from .exporter import TableExporter
 from .expressions import migrate_template, evaluate_template, evaluate_template_compat, get_function_listing
+from .expressions import _build_function_signature
 from .gsm7 import is_gsm7, replace_non_gsm7_accents
-from .queues import pop_task, push_task, HIGH_PRIORITY, LOW_PRIORITY
-from . import format_decimal, slugify_with, str_to_datetime, str_to_time, truncate, random_string, non_atomic_when_eager
+from .queues import pop_task, push_task, HIGH_PRIORITY, LOW_PRIORITY, nonoverlapping_task
+from .currencies import currency_for_country
+from . import format_decimal, slugify_with, str_to_datetime, str_to_time, truncate, random_string, non_atomic_when_eager, \
+    clean_string
 from . import PageableQuery, json_to_dict, dict_to_struct, datetime_to_ms, ms_to_datetime, dict_to_json, str_to_bool
 from . import percentage, datetime_to_json_date, json_date_to_datetime, timezone_to_country_code, non_atomic_gets
-from . import datetime_to_str
+from . import datetime_to_str, chunk_list, get_country_code_by_name
 
 
 class InitTest(TembaTest):
@@ -171,6 +175,51 @@ class InitTest(TembaTest):
         self.assertEquals(75, percentage(75, 100))
         self.assertEquals(76, percentage(759, 1000))
 
+    def test_get_country_code_by_name(self):
+        self.assertEqual('RW', get_country_code_by_name('Rwanda'))
+        self.assertEqual('US', get_country_code_by_name('United States of America'))
+        self.assertEqual('US', get_country_code_by_name('United States'))
+        self.assertEqual('GB', get_country_code_by_name('United Kingdom'))
+        self.assertEqual('CI', get_country_code_by_name('Ivory Coast'))
+        self.assertEqual('CD', get_country_code_by_name('Democratic Republic of the Congo'))
+
+    def test_remove_control_charaters(self):
+        self.assertIsNone(clean_string(None))
+        self.assertEqual(clean_string("ngert\x07in."), "ngertin.")
+        self.assertEqual(clean_string("Norbért"), "Norbért")
+
+
+class TemplateTagTest(TembaTest):
+
+    def test_icon(self):
+        from temba.campaigns.models import Campaign
+        from temba.triggers.models import Trigger
+        from temba.flows.models import Flow
+        from temba.utils.templatetags.temba import icon
+
+        campaign = Campaign.create(self.org, self.admin, 'Test Campaign', self.create_group('Test group', []))
+        flow = Flow.create(self.org, self.admin, 'Test Flow')
+        trigger = Trigger.objects.create(org=self.org, keyword='trigger', flow=flow, created_by=self.admin, modified_by=self.admin)
+
+        self.assertEquals('icon-instant', icon(campaign))
+        self.assertEquals('icon-feed', icon(trigger))
+        self.assertEquals('icon-tree', icon(flow))
+        self.assertEquals("", icon(None))
+
+    def test_format_seconds(self):
+        from temba.utils.templatetags.temba import format_seconds
+
+        self.assertIsNone(format_seconds(None))
+
+        # less than a minute
+        self.assertEquals("30 sec", format_seconds(30))
+
+        # round down
+        self.assertEquals("1 min", format_seconds(89))
+
+        # round up
+        self.assertEquals("2 min", format_seconds(100))
+
 
 class CacheTest(TembaTest):
 
@@ -207,7 +256,7 @@ class CacheTest(TembaTest):
 
     def test_incrby_existing(self):
         r = get_redis_connection()
-        r.setex('foo', 10, 100)
+        r.setex('foo', 100, 10)
         r.set('bar', 20)
 
         incrby_existing('foo', 3, r)  # positive delta
@@ -218,7 +267,7 @@ class CacheTest(TembaTest):
         self.assertEqual(r.get('foo'), '12')
         self.assertTrue(r.ttl('foo') > 0)
 
-        r.setex('foo', 0, 100)
+        r.setex('foo', 100, 0)
         incrby_existing('foo', 5, r)  # zero val key
         self.assertEqual(r.get('foo'), '5')
         self.assertTrue(r.ttl('foo') > 0)
@@ -335,7 +384,6 @@ class QueueTest(TembaTest):
         push_task(self.org, None, 'test', args[1])
         push_task(self.org, None, 'test', args[0], HIGH_PRIORITY)
 
-
         push_task(self.org2, None, 'test', args[4])
         push_task(self.org2, None, 'test', args[3], HIGH_PRIORITY)
         push_task(self.org2, None, 'test', args[5], LOW_PRIORITY)
@@ -354,6 +402,58 @@ class QueueTest(TembaTest):
                 curr2 += 1
 
         self.assertFalse(pop_task('test'))
+
+    @patch('redis.client.StrictRedis.lock')
+    @patch('redis.client.StrictRedis.get')
+    def test_nonoverlapping_task(self, mock_redis_get, mock_redis_lock):
+        mock_redis_get.return_value = None
+        task_calls = []
+
+        @nonoverlapping_task()
+        def test_task1(foo, bar):
+            task_calls.append('1-%d-%d' % (foo, bar))
+
+        @nonoverlapping_task(name='task2', time_limit=100)
+        def test_task2(foo, bar):
+            task_calls.append('2-%d-%d' % (foo, bar))
+
+        @nonoverlapping_task(name='task3', time_limit=100, lock_key='test_key', lock_timeout=55)
+        def test_task3(foo, bar):
+            task_calls.append('3-%d-%d' % (foo, bar))
+
+        self.assertIsInstance(test_task1, Task)
+        self.assertIsInstance(test_task2, Task)
+        self.assertEqual(test_task2.name, 'task2')
+        self.assertEqual(test_task2.time_limit, 100)
+        self.assertIsInstance(test_task3, Task)
+        self.assertEqual(test_task3.name, 'task3')
+        self.assertEqual(test_task3.time_limit, 100)
+
+        test_task1(11, 12)
+        test_task2(21, bar=22)
+        test_task3(foo=31, bar=32)
+
+        mock_redis_get.assert_any_call('celery-task-lock:test_task1')
+        mock_redis_get.assert_any_call('celery-task-lock:task2')
+        mock_redis_get.assert_any_call('test_key')
+        mock_redis_lock.assert_any_call('celery-task-lock:test_task1', timeout=900)
+        mock_redis_lock.assert_any_call('celery-task-lock:task2', timeout=100)
+        mock_redis_lock.assert_any_call('test_key', timeout=55)
+
+        self.assertEqual(task_calls, ['1-11-12', '2-21-22', '3-31-32'])
+
+        # simulate task being already running
+        mock_redis_get.reset_mock()
+        mock_redis_get.return_value = 'xyz'
+        mock_redis_lock.reset_mock()
+
+        # try to run again
+        test_task1(13, 14)
+
+        # check that task is skipped
+        mock_redis_get.assert_called_once_with('celery-task-lock:test_task1')
+        self.assertEqual(mock_redis_lock.call_count, 0)
+        self.assertEqual(task_calls, ['1-11-12', '2-21-22', '3-31-32'])
 
 
 class PageableQueryTest(TembaTest):
@@ -428,11 +528,11 @@ class ExpressionsTest(TembaTest):
         self.assertEquals(('Hello "World"', []),
                           evaluate_template('@( "Hello ""World""" )', self.context))  # string with escaping
         self.assertEquals(("Hello World", []),
-                          evaluate_template('@( "Hello" & " " & "World" )',  self.context))  # string concatenation
+                          evaluate_template('@( "Hello" & " " & "World" )', self.context))  # string concatenation
         self.assertEquals(('("', []),
-                          evaluate_template('@("(" & """")',  self.context))  # string literals containing delimiters
+                          evaluate_template('@("(" & """")', self.context))  # string literals containing delimiters
         self.assertEquals(('Joe Blow and Joe Blow', []),
-                          evaluate_template('@contact and @(contact)',  self.context))  # old and new style
+                          evaluate_template('@contact and @(contact)', self.context))  # old and new style
         self.assertEquals(("Joe Blow language is set to 'eng'", []),
                           evaluate_template("@contact language is set to '@contact.language'", self.context))  # language
 
@@ -442,9 +542,9 @@ class ExpressionsTest(TembaTest):
         self.assertEquals(("one اثنين ثلاثة four", []),
                           evaluate_template("one @flow.arabic four", self.context))  # LTR var, RTL value, LTR text
         self.assertEquals(("واحد اثنين ثلاثة أربعة", []),
-                          evaluate_template("واحد @flow.arabic أربعة",  self.context))  # LTR var, RTL value, RTL text
+                          evaluate_template("واحد @flow.arabic أربعة", self.context))  # LTR var, RTL value, RTL text
         self.assertEquals(("واحد two three أربعة", []),
-                          evaluate_template("واحد @flow.english أربعة",  self.context))  # LTR var, LTR value, RTL text
+                          evaluate_template("واحد @flow.english أربعة", self.context))  # LTR var, LTR value, RTL text
 
         # test decimal arithmetic
         self.assertEquals(("Result: 7", []),
@@ -532,40 +632,40 @@ class ExpressionsTest(TembaTest):
 
     def test_evaluate_template_compat(self):
         # test old style expressions, i.e. @ and with filters
-        self.assertEquals(("Hello World Joe Joe", []),
-                          evaluate_template_compat("Hello World @contact.first_name @contact.first_name", self.context))
-        self.assertEquals(("Hello World Joe Blow", []),
-                          evaluate_template_compat("Hello World @contact", self.context))
-        self.assertEquals(("Hello World: Well", []),
-                          evaluate_template_compat("Hello World: @flow.water_source", self.context))
-        self.assertEquals(("Hello World: ", []),
-                          evaluate_template_compat("Hello World: @flow.blank", self.context))
-        self.assertEquals(("Hello اثنين ثلاثة thanks", []),
-                          evaluate_template_compat("Hello @flow.arabic thanks", self.context))
+        self.assertEqual(("Hello World Joe Joe", []),
+                         evaluate_template_compat("Hello World @contact.first_name @contact.first_name", self.context))
+        self.assertEqual(("Hello World Joe Blow", []),
+                         evaluate_template_compat("Hello World @contact", self.context))
+        self.assertEqual(("Hello World: Well", []),
+                         evaluate_template_compat("Hello World: @flow.water_source", self.context))
+        self.assertEqual(("Hello World: ", []),
+                         evaluate_template_compat("Hello World: @flow.blank", self.context))
+        self.assertEqual(("Hello اثنين ثلاثة thanks", []),
+                         evaluate_template_compat("Hello @flow.arabic thanks", self.context))
         self.assertEqual((' %20%3D%26%D8%A8 ', []),
-                          evaluate_template_compat(' @flow.urlstuff ', self.context, True))  # url encoding enabled
-        self.assertEquals(("Hello Joe", []),
-                          evaluate_template_compat("Hello @contact.first_name|notthere", self.context))
-        self.assertEquals(("Hello joe", []),
-                          evaluate_template_compat("Hello @contact.first_name|lower_case", self.context))
-        self.assertEquals(("Hello Joe", []),
-                          evaluate_template_compat("Hello @contact.first_name|lower_case|capitalize", self.context))
-        self.assertEquals(("Hello Joe", []),
-                          evaluate_template_compat("Hello @contact|first_word", self.context))
-        self.assertEquals(("Hello Blow", []),
-                          evaluate_template_compat("Hello @contact|remove_first_word|title_case", self.context))
-        self.assertEquals(("Hello Joe Blow", []),
-                          evaluate_template_compat("Hello @contact|title_case", self.context))
-        self.assertEquals(("Hello JOE", []),
-                          evaluate_template_compat("Hello @contact.first_name|upper_case", self.context))
-        self.assertEquals(("Hello Joe from info@example.com", []),
-                          evaluate_template_compat("Hello @contact.first_name from info@example.com", self.context))
-        self.assertEquals(("Joe", []),
-                          evaluate_template_compat("@contact.first_name", self.context))
-        self.assertEquals(("foo@nicpottier.com", []),
-                          evaluate_template_compat("foo@nicpottier.com", self.context))
-        self.assertEquals(("@nicpottier is on twitter", []),
-                          evaluate_template_compat("@nicpottier is on twitter", self.context))
+                         evaluate_template_compat(' @flow.urlstuff ', self.context, True))  # url encoding enabled
+        self.assertEqual(("Hello Joe", []),
+                         evaluate_template_compat("Hello @contact.first_name|notthere", self.context))
+        self.assertEqual(("Hello joe", []),
+                         evaluate_template_compat("Hello @contact.first_name|lower_case", self.context))
+        self.assertEqual(("Hello Joe", []),
+                         evaluate_template_compat("Hello @contact.first_name|lower_case|capitalize", self.context))
+        self.assertEqual(("Hello Joe", []),
+                         evaluate_template_compat("Hello @contact|first_word", self.context))
+        self.assertEqual(("Hello Blow", []),
+                         evaluate_template_compat("Hello @contact|remove_first_word|title_case", self.context))
+        self.assertEqual(("Hello Joe Blow", []),
+                         evaluate_template_compat("Hello @contact|title_case", self.context))
+        self.assertEqual(("Hello JOE", []),
+                         evaluate_template_compat("Hello @contact.first_name|upper_case", self.context))
+        self.assertEqual(("Hello Joe from info@example.com", []),
+                         evaluate_template_compat("Hello @contact.first_name from info@example.com", self.context))
+        self.assertEqual(("Joe", []),
+                         evaluate_template_compat("@contact.first_name", self.context))
+        self.assertEqual(("foo@nicpottier.com", []),
+                         evaluate_template_compat("foo@nicpottier.com", self.context))
+        self.assertEqual(("@nicpottier is on twitter", []),
+                         evaluate_template_compat("@nicpottier is on twitter", self.context))
 
     def test_migrate_template(self):
         self.assertEqual(migrate_template("Hi @contact.name|upper_case|capitalize from @flow.chw|lower_case"),
@@ -589,7 +689,58 @@ class ExpressionsTest(TembaTest):
 
     def test_get_function_listing(self):
         listing = get_function_listing()
-        self.assertEqual(listing[0], {'name': 'ABS', 'display': "Returns the absolute value of a number"})
+        self.assertEqual(listing[0], {
+            'signature': 'ABS(number)',
+            'name': 'ABS',
+            'display': "Returns the absolute value of a number"
+        })
+
+    def test_build_function_signature(self):
+        self.assertEqual('ABS()',
+                         _build_function_signature(dict(name='ABS',
+                                                        params=[])))
+
+        self.assertEqual('ABS(number)',
+                         _build_function_signature(dict(name='ABS',
+                                                        params=[dict(optional=False,
+                                                                     name='number',
+                                                                     vararg=False)])))
+
+        self.assertEqual('ABS(number, ...)',
+                         _build_function_signature(dict(name='ABS',
+                                                        params=[dict(optional=False,
+                                                                     name='number',
+                                                                     vararg=True)])))
+
+        self.assertEqual('ABS([number])',
+                         _build_function_signature(dict(name='ABS',
+                                                        params=[dict(optional=True,
+                                                                     name='number',
+                                                                     vararg=False)])))
+
+        self.assertEqual('ABS([number], ...)',
+                         _build_function_signature(dict(name='ABS',
+                                                        params=[dict(optional=True,
+                                                                     name='number',
+                                                                     vararg=True)])))
+
+        self.assertEqual('MOD(number, divisor)',
+                         _build_function_signature(dict(name='MOD',
+                                                        params=[dict(optional=False,
+                                                                     name='number',
+                                                                     vararg=False),
+                                                                dict(optional=False,
+                                                                     name='divisor',
+                                                                     vararg=False)])))
+
+        self.assertEqual('MOD(number, ..., divisor)',
+                         _build_function_signature(dict(name='MOD',
+                                                        params=[dict(optional=False,
+                                                                     name='number',
+                                                                     vararg=True),
+                                                                dict(optional=False,
+                                                                     name='divisor',
+                                                                     vararg=False)])))
 
     def test_percentage(self):
         self.assertEquals(0, percentage(0, 100))
@@ -610,13 +761,39 @@ class GSM7Test(TembaTest):
         self.assertEquals("No capital accented E!", replaced)
         self.assertTrue(is_gsm7(replaced))
 
+        replaced = replace_non_gsm7_accents("No crazy “word” quotes.")
+        self.assertEquals('No crazy "word" quotes.', replaced)
+        self.assertTrue(is_gsm7(replaced))
+
+
+class ChunkTest(TembaTest):
+
+    def test_chunking(self):
+        curr = 0
+        for chunk in chunk_list(xrange(100), 7):
+            batch_curr = curr
+            for item in chunk:
+                self.assertEqual(item, curr)
+                curr += 1
+
+            # again to make sure things work twice
+            curr = batch_curr
+            for item in chunk:
+                self.assertEqual(item, curr)
+                curr += 1
+
+        self.assertEqual(curr, 100)
+
 
 class TableExporterTest(TembaTest):
+    @patch('temba.utils.exporter.TableExporter.MAX_XLS_COLS', new_callable=PropertyMock)
+    def test_csv(self, mock_max_cols):
+        test_max_cols = 255
+        mock_max_cols.return_value = test_max_cols
 
-    def test_csv(self):
         # tests writing a CSV, that is a file that has more than 255 columns
         cols = []
-        for i in range(256):
+        for i in range(test_max_cols + 1):
             cols.append("Column %d" % i)
 
         # create a new exporter
@@ -627,7 +804,7 @@ class TableExporterTest(TembaTest):
 
         # write some rows
         values = []
-        for i in range(256):
+        for i in range(test_max_cols + 1):
             values.append("Value %d" % i)
 
         exporter.write_row(values)
@@ -649,7 +826,11 @@ class TableExporterTest(TembaTest):
             # should only be three rows
             self.assertEquals(2, idx)
 
-    def test_xls(self):
+    @patch('temba.utils.exporter.TableExporter.MAX_XLS_ROWS', new_callable=PropertyMock)
+    def test_xls(self, mock_max_rows):
+        test_max_rows = 1500
+        mock_max_rows.return_value = test_max_rows
+
         cols = []
         for i in range(32):
             cols.append("Column %d" % i)
@@ -663,26 +844,41 @@ class TableExporterTest(TembaTest):
         for i in range(32):
             values.append("Value %d" % i)
 
-        # write out 67,000 rows, that'll make two sheets
-        for i in range(67000):
+        # write out 1050000 rows, that'll make two sheets
+        for i in range(test_max_rows + 200):
             exporter.write_row(values)
 
-        file = exporter.save_file()
-        workbook = open_workbook(file.name, 'rb')
+        exporter_file = exporter.save_file()
+        workbook = load_workbook(filename=exporter_file.name)
 
-        self.assertEquals(2, len(workbook.sheets()))
+        self.assertEquals(2, len(workbook.worksheets))
 
         # check our sheet 1 values
-        sheet1 = workbook.sheets()[0]
-        self.assertEquals(cols, sheet1.row_values(0))
-        self.assertEquals(values, sheet1.row_values(1))
+        sheet1 = workbook.worksheets[0]
 
-        self.assertEquals(65536, sheet1.nrows)
-        self.assertEquals(32, sheet1.ncols)
+        rows = tuple(sheet1.rows)
 
-        sheet2 = workbook.sheets()[1]
-        self.assertEquals(cols, sheet2.row_values(0))
-        self.assertEquals(values, sheet2.row_values(1))
+        self.assertEquals(cols, [cell.value for cell in rows[0]])
+        self.assertEquals(values, [cell.value for cell in rows[1]])
 
-        self.assertEquals(67000+2-65536, sheet2.nrows)
-        self.assertEquals(32, sheet2.ncols)
+        self.assertEquals(test_max_rows, len(list(sheet1.rows)))
+        self.assertEquals(32, len(list(sheet1.columns)))
+
+        sheet2 = workbook.worksheets[1]
+        rows = tuple(sheet2.rows)
+        self.assertEquals(cols, [cell.value for cell in rows[0]])
+        self.assertEquals(values, [cell.value for cell in rows[1]])
+
+        self.assertEquals(200 + 2, len(list(sheet2.rows)))
+        self.assertEquals(32, len(list(sheet2.columns)))
+
+
+class CurrencyTest(TembaTest):
+
+    def test_currencies(self):
+        self.assertEqual(currency_for_country('US').letter, 'USD')
+        self.assertEqual(currency_for_country('EC').letter, 'USD')
+        self.assertEqual(currency_for_country('FR').letter, 'EUR')
+        self.assertEqual(currency_for_country('DE').letter, 'EUR')
+        self.assertEqual(currency_for_country('YE').letter, 'YER')
+        self.assertEqual(currency_for_country('AF').letter, 'AFN')

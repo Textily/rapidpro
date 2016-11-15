@@ -2,8 +2,8 @@ from __future__ import unicode_literals
 
 from datetime import timedelta
 from django.utils import timezone
+from django_redis import get_redis_connection
 from djcelery_transactions import task
-from redis_cache import get_redis_connection
 from .models import WebHookEvent, WebHookResult, COMPLETE, FAILED, ERRORED, PENDING
 
 
@@ -29,7 +29,7 @@ def deliver_event_task(event_id):  # pragma: no cover
 
 
 @task(track_started=True, name='retry_events_task')
-def retry_events_task(): # pragma: no cover
+def retry_events_task():  # pragma: no cover
     print "** retrying errored webhook events"
 
     # get all events that have an error and need to be retried

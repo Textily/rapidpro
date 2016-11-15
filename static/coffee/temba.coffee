@@ -62,7 +62,7 @@ findMatches = (query, data, start, lastIdx, prependChar = undefined) ->
 
   checkboxes.each ->
     input = $(this)
-    controlGroup = input.parents('.form-group')
+    controlGroup = input.parents('.control-group')
     label = controlGroup.children("label").text()
     help = input.parent().children(".help-block")
 
@@ -98,6 +98,11 @@ findMatches = (query, data, start, lastIdx, prependChar = undefined) ->
     controlGroup.replaceWith(html)
 
   ele = $(".font-checkbox")
+
+  helpText = ele.children('.controls').children('.help-block').children('label')
+  helpText.on 'click', (event) ->
+    $(this).parent().parent('.field-input').children('.glyph.notif-checkbox').click()
+    event.preventDefault();
 
   glyphCheck = ele.children('.controls').children('.glyph.notif-checkbox')
   glyphCheck.on 'click', ->
@@ -260,7 +265,7 @@ class @Modal
     @ele = $('#modal-template').clone()
     @ele.data('object', @)
     @ele.attr('id', 'active-modal')
-    @keyboard = true
+    @keyboard = false
     modalClose = @ele.find('.close')
     modalClose.on('click', -> modal.dismiss())
 
@@ -399,19 +404,9 @@ class @Modax extends @ConfirmationModal
           if modal.listeners and modal.listeners.onFormLoaded
             modal.listeners.onFormLoaded()
 
-          modal.wireEnter()
           prepareOmnibox()
       )
 
-    # trap ENTER on the form, use our modal submit
-    wireEnter: ->
-      modal = @
-      modal.ele.find("form").on('keydown', (e) ->
-        if e.keyCode == ENTER
-          modal.submit()
-          return false
-        )
- 
     submit: ->
       modal = @
       modal.ele.find('.primary').text(gettext("Processing..")).addClass("disabled")
@@ -451,7 +446,6 @@ class @Modax extends @ConfirmationModal
           if modal.listeners and modal.listeners.onCompleted
               modal.listeners.onCompleted()
           else
-            modal.wireEnter()
             modal.focusFirstInput()
       )
 
